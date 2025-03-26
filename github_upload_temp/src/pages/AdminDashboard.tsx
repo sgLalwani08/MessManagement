@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, BarChart2, QrCode, Calendar, Download, Search, Filter, Clock, AlertCircle, CheckCircle, XCircle, ClipboardList, LogOut, Utensils } from 'lucide-react';
+import { Users, BarChart2, QrCode, Calendar, Download, Search, Filter, Clock, AlertCircle, CheckCircle, XCircle, ClipboardList, LogOut, Utensils, User } from 'lucide-react';
 import QRScanner from '../components/QRScanner';
 import FeedbackList from '../components/FeedbackList';
 import MenuEditor from '../components/MenuEditor';
@@ -74,7 +74,10 @@ const AdminDashboard = () => {
 
   const loadDashboardData = () => {
     try {
-      // Load registered students from registeredUsers instead of registeredStudents
+      // Clean up test data first
+      cleanupTestData();
+
+      // Load registered students from registeredUsers
       const students = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
       setRegisteredStudents(students.filter((s: StudentInfo) => s.registrationStatus === 'approved'));
 
@@ -101,6 +104,52 @@ const AdminDashboard = () => {
       setPendingRegistrations(registrations);
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
+    }
+  };
+
+  const cleanupTestData = () => {
+    try {
+      // Get current data
+      const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      const pendingRegistrations = JSON.parse(localStorage.getItem('pendingRegistrations') || '[]');
+      const scanHistory = JSON.parse(localStorage.getItem('scanHistory') || '[]');
+      const headCount = JSON.parse(localStorage.getItem('headCount') || '{}');
+
+      // Remove test data (any entry with test.student@nitw.ac.in or containing "Test Student")
+      const cleanedRegisteredUsers = registeredUsers.filter((user: StudentInfo) => 
+        !user.email.includes('test.student@') && 
+        !user.name.includes('Test Student')
+      );
+
+      const cleanedPendingRegistrations = pendingRegistrations.filter((reg: PendingRegistration) => 
+        !reg.email.includes('test.student@') && 
+        !reg.name.includes('Test Student')
+      );
+
+      const cleanedScanHistory = scanHistory.filter((scan: ScanRecord) => 
+        !scan.studentId.includes('123456789') && 
+        !(scan.studentName && scan.studentName.includes('Test Student'))
+      );
+
+      // Save cleaned data back to localStorage
+      localStorage.setItem('registeredUsers', JSON.stringify(cleanedRegisteredUsers));
+      localStorage.setItem('pendingRegistrations', JSON.stringify(cleanedPendingRegistrations));
+      localStorage.setItem('scanHistory', JSON.stringify(cleanedScanHistory));
+
+      // Recalculate head count from cleaned scan history
+      const newHeadCount = cleanedScanHistory.reduce((acc: Record<string, any>, scan: ScanRecord) => {
+        const date = new Date(scan.timestamp).toLocaleDateString();
+        if (!acc[date]) {
+          acc[date] = { breakfast: 0, lunch: 0, dinner: 0, total: 0 };
+        }
+        acc[date][scan.mealType.toLowerCase()]++;
+        acc[date].total++;
+        return acc;
+      }, {});
+
+      localStorage.setItem('headCount', JSON.stringify(newHeadCount));
+    } catch (err) {
+      console.error('Failed to clean up test data:', err);
     }
   };
 
@@ -379,7 +428,17 @@ const AdminDashboard = () => {
       )}
 
       {activeTab === 'scanner' && (
-        <div className="bg-white rounded-lg shadow-sm">
+        <div>
+          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <h3 className="text-lg font-medium text-blue-800 mb-2">QR Code Scanner Instructions</h3>
+            <ul className="list-disc pl-5 text-blue-700 space-y-1">
+              <li>Click "Scan with Camera" to activate your device's camera for live QR scanning</li>
+              <li>Position the QR code within the square frame on the screen</li>
+              <li>If camera access fails, check your browser permissions</li>
+              <li>For testing, you can also upload a QR code image using "Upload QR Image"</li>
+              <li>Student information will appear after a successful scan</li>
+            </ul>
+          </div>
           <QRScanner />
         </div>
       )}
