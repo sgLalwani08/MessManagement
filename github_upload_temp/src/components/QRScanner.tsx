@@ -1,6 +1,6 @@
-import React, { useState, useRef } from 'react';
-import { Camera, Upload, User, AlertCircle, CheckCircle } from 'lucide-react';
-import { Html5QrcodeScanner } from 'html5-qrcode';
+import React, { useState, useRef, useEffect } from 'react';
+import { Camera, Upload, User, AlertCircle, CheckCircle, X } from 'lucide-react';
+import { Html5QrcodeScanner, Html5Qrcode } from 'html5-qrcode';
 
 interface StudentInfo {
   name: string;
@@ -67,7 +67,35 @@ const QRScanner = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [scannerActive, setScannerActive] = useState(false);
+  const [cameraLoading, setCameraLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const scannerRef = useRef<Html5QrcodeScanner | null>(null);
+  const scannerDivRef = useRef<HTMLDivElement>(null);
+
+  // Clean up the scanner when component unmounts
+  useEffect(() => {
+    return () => {
+      if (scannerRef.current) {
+        try {
+          scannerRef.current.clear();
+        } catch (err) {
+          console.error('Failed to clear scanner:', err);
+        }
+      }
+    };
+  }, []);
+
+  // Also clean up when scanner is deactivated
+  useEffect(() => {
+    if (!scannerActive && scannerRef.current) {
+      try {
+        scannerRef.current.clear();
+        scannerRef.current = null;
+      } catch (err) {
+        console.error('Failed to clear scanner:', err);
+      }
+    }
+  }, [scannerActive]);
 
   const getCurrentMealType = () => {
     const hour = new Date().getHours();
@@ -128,23 +156,123 @@ const QRScanner = () => {
     }
   };
 
-  const startScanner = () => {
-    setScannerActive(true);
-    const scanner = new Html5QrcodeScanner('reader', {
-      qrbox: { width: 250, height: 250 },
-      fps: 5,
-    });
-
-    scanner.render(
-      async (decodedText) => {
-        await processQRData(decodedText);
-        scanner.clear();
-        setScannerActive(false);
-      },
-      (error) => {
-        console.error(error);
+  const checkCameraPermission = async () => {
+    try {
+      // Try to access the camera to check permissions
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: true,
+        audio: false
+      });
+      
+      // If we get here, we have permission
+      // Make sure to stop the stream to release the camera
+      stream.getTracks().forEach(track => track.stop());
+      return true;
+    } catch (err: any) {
+      console.error('Camera permission error:', err);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        return false;
+      } else if (err.name === 'NotFoundError') {
+        return 'no-camera';
       }
-    );
+      return false;
+    }
+  };
+
+  const startScanner = async () => {
+    setError(null);
+    setCameraLoading(true);
+    
+    // First check camera permissions
+    const hasPermission = await checkCameraPermission();
+    
+    if (hasPermission === 'no-camera') {
+      setError('No camera detected on this device');
+      setCameraLoading(false);
+      return;
+    }
+    
+    if (hasPermission === false) {
+      setError('Camera access denied. Please allow camera access in your browser settings.');
+      setCameraLoading(false);
+      return;
+    }
+    
+    // Clear any existing scanner
+    if (scannerRef.current) {
+      try {
+        scannerRef.current.clear();
+        scannerRef.current = null;
+      } catch (err) {
+        console.error('Failed to clear existing scanner:', err);
+      }
+    }
+    
+    setScannerActive(true);
+    
+    // Wait for the next render cycle to ensure the reader element exists
+    setTimeout(() => {
+      try {
+        // Create the scanner with a slightly modified config
+        const scanner = new Html5QrcodeScanner(
+          'reader',
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 },
+            rememberLastUsedCamera: true,
+            aspectRatio: 1.0,
+            showTorchButtonIfSupported: true,
+            showZoomSliderIfSupported: true,
+          },
+          /* verbose= */ false
+        );
+        
+        scannerRef.current = scanner;
+        
+        // Render the scanner
+        scanner.render(
+          // Success callback
+          async (decodedText: string) => {
+            try {
+              await processQRData(decodedText);
+            } catch (err) {
+              console.error('Error processing QR data:', err);
+              setError('Failed to process QR code');
+            }
+          },
+          // Error callback
+          (errorMessage: string) => {
+            // Don't display errors for normal scanning process
+            console.log('Scanner error (non-critical):', errorMessage);
+            
+            // Only show critical errors to the user
+            if (errorMessage.includes('Camera access is blocked')) {
+              setError('Camera access was blocked. Please allow access and try again.');
+              stopScanner();
+            }
+          }
+        );
+        
+        setCameraLoading(false);
+      } catch (err: any) {
+        console.error('Failed to initialize camera:', err);
+        setError(`Could not start scanner: ${err.message || 'Unknown error'}`);
+        setScannerActive(false);
+        setCameraLoading(false);
+      }
+    }, 100);
+  };
+
+  const stopScanner = () => {
+    if (scannerRef.current) {
+      try {
+        scannerRef.current.clear();
+        scannerRef.current = null;
+      } catch (err) {
+        console.error('Failed to clear scanner:', err);
+      }
+    }
+    setScannerActive(false);
   };
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -158,24 +286,36 @@ const QRScanner = () => {
           throw new Error('Failed to read file');
         }
 
-        // Import HTML5-QRCode dynamically
-        const { Html5Qrcode } = await import('html5-qrcode');
-        const html5QrCode = new Html5Qrcode("file-qr-reader");
-        const imageUrl = e.target.result as string;
-        
         setLoading(true);
         setError(null);
         
-        // Decode QR from image
+        // Create a new Html5Qrcode instance
         try {
-          const decodedText = await html5QrCode.scanFileV2(file, /* verbose= */ false);
-          await processQRData(decodedText.decodedText);
+          const html5QrCode = new Html5Qrcode("file-qr-reader");
+          
+          // Decode QR from image
+          try {
+            const decodedText = await html5QrCode.scanFileV2(file, /* verbose= */ false);
+            await processQRData(decodedText.decodedText);
+          } catch (err) {
+            console.error('Failed to decode QR from image:', err);
+            setError('Failed to decode QR code from image. Please try a clearer image.');
+          } finally {
+            // Always clean up the scanner
+            try {
+              html5QrCode.clear();
+            } catch (err) {
+              console.error('Failed to clear file scanner:', err);
+            }
+            setLoading(false);
+          }
         } catch (err) {
-          setError('Failed to decode QR code from image. Please try a clearer image.');
-        } finally {
+          console.error('Error creating QR scanner for file:', err);
+          setError('Failed to initialize QR scanner for image');
           setLoading(false);
         }
       } catch (err) {
+        console.error('Error processing file upload:', err);
         setError('Failed to process QR code image');
         setLoading(false);
       }
@@ -195,10 +335,11 @@ const QRScanner = () => {
               <div className="space-y-4">
                 <button
                   onClick={startScanner}
-                  className="w-full flex items-center justify-center gap-2 p-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  disabled={cameraLoading}
+                  className="w-full flex items-center justify-center gap-2 p-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Camera className="h-5 w-5" />
-                  Scan with Camera
+                  {cameraLoading ? 'Initializing Camera...' : 'Scan with Camera'}
                 </button>
                 
                 <button
@@ -220,11 +361,32 @@ const QRScanner = () => {
             )}
 
             {scannerActive && (
-              <div id="reader" className="w-full"></div>
+              <div>
+                <div className="flex justify-end mb-2">
+                  <button
+                    onClick={stopScanner}
+                    className="p-2 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100"
+                    title="Close Scanner"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <div id="reader" ref={scannerDivRef} className="w-full min-h-[300px]"></div>
+                <div className="text-center text-sm text-gray-500 mt-2">
+                  <p>Position the QR code within the scanner frame</p>
+                </div>
+              </div>
             )}
 
             <div id="file-qr-reader" className="hidden"></div>
           </div>
+
+          {cameraLoading && (
+            <div className="flex items-center justify-center p-4">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              <span className="ml-2">Accessing camera...</span>
+            </div>
+          )}
 
           {loading && (
             <div className="flex items-center justify-center p-4">
