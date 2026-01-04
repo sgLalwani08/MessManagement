@@ -8,7 +8,7 @@ interface LocationState {
 }
 
 const ADMIN_EMAIL = 'sl24eeb0b57@nitw.ac.in';
-const ADMIN_PASSWORD = 'Messadmin123';
+const ADMIN_PASSWORD = 'admin@123';
 const STUDENT_EMAIL_DOMAIN = 'nitw.ac.in';
 
 const Login = () => {
